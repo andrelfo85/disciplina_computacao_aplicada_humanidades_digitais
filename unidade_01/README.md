@@ -1,0 +1,106 @@
+# Unidade 1 — Questões das Humanidades e problemas computacionais
+
+Esta pasta contém o material teórico-prático da primeira unidade da disciplina
+**Computação Aplicada a Problemas em Humanidades Digitais**.
+
+## Ordem de estudo
+
+1. `00_guia_da_unidade.ipynb`
+2. `01_perguntas_e_problemas_computacionais.ipynb`
+3. `02_representacao_e_operacionalizacao.ipynb`
+4. `03_dados_corpus_e_evidencias.ipynb`
+5. `04_oficina_projeto_de_pesquisa.ipynb`
+6. `exercicios_unidade_01_texto.md`
+7. `referencias.md`
+
+## Abrir os notebooks no Google Colab
+
+| Material | Arquivo | Google Colab |
+|---|---|---|
+| Guia da unidade | [`00_guia_da_unidade.ipynb`](00_guia_da_unidade.ipynb) | [Abrir no Colab](https://colab.research.google.com/github/lalvim/disciplina_computacao_aplicada_humanidades_digitais/blob/main/unidade_01/00_guia_da_unidade.ipynb) |
+| Perguntas e problemas | [`01_perguntas_e_problemas_computacionais.ipynb`](01_perguntas_e_problemas_computacionais.ipynb) | [Abrir no Colab](https://colab.research.google.com/github/lalvim/disciplina_computacao_aplicada_humanidades_digitais/blob/main/unidade_01/01_perguntas_e_problemas_computacionais.ipynb) |
+| Representação e operacionalização | [`02_representacao_e_operacionalizacao.ipynb`](02_representacao_e_operacionalizacao.ipynb) | [Abrir no Colab](https://colab.research.google.com/github/lalvim/disciplina_computacao_aplicada_humanidades_digitais/blob/main/unidade_01/02_representacao_e_operacionalizacao.ipynb) |
+| Dados, corpus e evidências | [`03_dados_corpus_e_evidencias.ipynb`](03_dados_corpus_e_evidencias.ipynb) | [Abrir no Colab](https://colab.research.google.com/github/lalvim/disciplina_computacao_aplicada_humanidades_digitais/blob/main/unidade_01/03_dados_corpus_e_evidencias.ipynb) |
+| Oficina do projeto | [`04_oficina_projeto_de_pesquisa.ipynb`](04_oficina_projeto_de_pesquisa.ipynb) | [Abrir no Colab](https://colab.research.google.com/github/lalvim/disciplina_computacao_aplicada_humanidades_digitais/blob/main/unidade_01/04_oficina_projeto_de_pesquisa.ipynb) |
+
+O link carrega o notebook diretamente do GitHub. No Notebook 03, execute a
+célula **Preparação do ambiente** antes das demais: ela clona o repositório no
+ambiente temporário e posiciona a execução na pasta desta unidade. Os demais
+notebooks não dependem de arquivos locais para executar seu código.
+
+## Dependências
+
+- Python 3
+- pandas
+- JupyterLab, Jupyter Notebook ou VS Code com extensão Jupyter
+
+Os exemplos não dependem de acesso à internet. Os dados da pasta `dados` são
+fictícios e foram criados exclusivamente para fins didáticos; não devem ser
+utilizados para produzir afirmações históricas.
+
+A pasta `imagens` reúne diagramas autorais, a ilustração conceitual de abertura
+e uma fonte histórica em domínio público. O arquivo `imagens/README.md` registra
+proveniência, licença, alterações e textos alternativos. As imagens são locais e
+continuam disponíveis em uso offline e no Colab.
+
+O arquivo `exercicios_unidade_01_texto.md` contém 18 questões de múltipla
+escolha. O gabarito separado apresenta a chave, as explicações e a revisão por
+tópico.
+
+## Carga e modalidade
+
+| Modalidade | Material | Tempo |
+|---|---|---:|
+| Preparação | Alves (2016) e diagnóstico | 30 min |
+| Aula 1 | Notebooks 00, 01 e início do 02 | 3 h 30 |
+| Preparação | Rodrigues (2020) | 40 min |
+| Aula 2 | Conclusão do 02, Notebook 03 e oficina | 3 h |
+| Revisão assíncrona | Exercícios textuais | 20 min |
+
+As leituras complementares e extensões não integram a carga essencial.
+
+## Material do docente
+
+A pasta `gabaritos` contém respostas objetivas, respostas-modelo e rubricas.
+Como grande parte da unidade envolve formulação e interpretação, os modelos das
+atividades abertas são referências de coerência, não respostas únicas.
+
+A pasta `professor` contém o roteiro cronológico para condução dos encontros.
+O arquivo `cronograma_aula_01_4h.md` organiza a primeira aula de quatro horas,
+incluindo intervalo, atividades essenciais e ajustes conforme o ritmo da turma.
+
+A pasta separa organizacionalmente o material, mas não restringe o acesso de
+quem possui o repositório.
+
+## Revisão antes da oferta
+
+A pasta `notes/revisores` define uma banca de revisão com seis especialidades:
+nível acadêmico, didática, alinhamento, Humanidades Digitais, referências e
+qualidade técnica/acessibilidade. Ela também contém matriz de avaliação e modelo
+de parecer.
+
+Os pareceres executados ficam em `notes/revisores/pareceres`. Após alterações
+acadêmicas ou didáticas, uma nova rodada deve registrar explicitamente quais
+achados foram resolvidos. A Rodada 2 aprovou a unidade com ajustes. Uma
+avaliação extraordinária posterior identificou ajuste alto na classificação das
+perguntas; o teste manual com leitor de tela também permanece pendente.
+
+## Execução
+
+A partir da raiz do repositório:
+
+```bash
+python3 -m pip install -r requirements.txt
+jupyter lab unidade_01
+```
+
+Também é possível abrir os arquivos individualmente no VS Code. Execute as
+células na ordem. Nas atividades de escrita, entre no modo de edição das células
+Markdown e substitua `Escreva aqui` por suas respostas. As células Python são
+experimentos: execute-as, altere os parâmetros quando solicitado e interprete
+os resultados no texto.
+
+## Produto da unidade
+
+O último notebook conduz à formulação inicial da pergunta de pesquisa, incluindo
+unidade de análise, corpus, operacionalização, evidências esperadas e limites.

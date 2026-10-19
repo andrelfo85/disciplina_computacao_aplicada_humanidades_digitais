@@ -1,0 +1,29 @@
+{
+  "titulo": "Recorte de dados de livros e autores do Goodreads",
+  "arquivo": "livros_good_reads.csv",
+  "natureza": "dados derivados de registros públicos de uma rede social de catalogação e avaliação de livros (Goodreads); não são dados fictícios",
+  "origem_declarada": "arquivo CSV fornecido pelo estudante, descrito como recorte de dados extraídos do Goodreads",
+  "origem_desconhecida": [
+    "quem realizou a extração original",
+    "data exata da coleta (o ano de publicação mais recente é 2019, o que sugere coleta em 2019 ou depois)",
+    "método de coleta (API, raspagem ou outro)",
+    "critério de seleção dos 10.454 livros",
+    "método de atribuição do campo genero_autor",
+    "data e método de tradução dos nomes das colunas para o português"
+  ],
+  "recebido_em": "2026-10-15",
+  "sha256": "40effdd64def421fbd9b6665542ebfbf058ad3c6c902acfba96227763b9cfe64",
+  "tamanho_bytes": 1345736,
+  "codificacao": "UTF-8 com BOM (ler com encoding='utf-8-sig')",
+  "separador": ",",
+  "linhas": 10454,
+  "colunas": 15,
+  "unidade_da_linha": "um livro (obra catalogada), com atributos do livro e do autor principal",
+  "politica": "arquivo imutável; nenhuma correção é feita nesta camada",
+  "restricoes": [
+    "nomes de autores são dados pessoais de pessoas naturais identificadas (LGPD, art. 5º, I)",
+    "o campo genero_autor é uma classificação binária de origem desconhecida e com erros detectados na auditoria da Unidade 3",
+    "os termos de uso do Goodreads e da fonte intermediária precisam ser verificados antes de qualquer republicação"
+  ],
+  "acao_pendente": "solicitar ao fornecedor do arquivo a origem, a data de coleta, o critério de seleção e o método de atribuição de gênero"
+}

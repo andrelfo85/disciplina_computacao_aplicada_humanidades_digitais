@@ -1,0 +1,16 @@
+campo,papel,descricao,tipo,dominio_ou_regra,origem,limitacao
+id_livro,identificador,Identificador numérico do livro no Goodreads,inteiro tratado como texto,único e não vazio no recorte,Goodreads via arquivo recebido,"identifica a edição ou obra catalogada; não garante que duas edições da mesma obra tenham o mesmo id"
+titulo,metadado descritivo,Título do livro como registrado,texto,não vazio; pode conter marcador de série entre parênteses e alfabetos não latinos,Goodreads,"129 títulos sem letras latinas; marcadores de série misturados ao título"
+id_autor,identificador,Identificador numérico do autor principal no Goodreads,inteiro tratado como texto,chave para a tabela de autores,Goodreads,"um autor por livro; coautorias ausentes; um mesmo nome pode ter dois ids (ex.: William Gibson)"
+genero_1,variável categórica,Primeiro gênero literário atribuído ao livro,categoria,111 valores no recorte,estantes criadas por usuários do Goodreads (regra de ordenação desconhecida),"rótulos da comunidade, não classificação editorial"
+genero_2,variável categórica,Segundo gênero literário atribuído ao livro,categoria,146 valores; sempre diferente de genero_1,estantes de usuários do Goodreads,idem
+paginas,variável numérica (razão),Número de páginas da edição catalogada,inteiro,1 a 6576 no recorte,Goodreads,"29 valores suspeitos (até 10 ou acima de 2000); depende da edição"
+ano_publicacao,variável temporal,Ano de publicação registrado,inteiro,-720 a 2019; negativo indica a.C.,Goodreads,"não se sabe se é primeira publicação ou edição catalogada"
+nota_livro,variável numérica,Nota média das avaliações por estrelas,decimal,1 a 5,uso da rede,"média sem distribuição; não mede qualidade literária"
+n_avaliacoes,variável de reconhecimento,Número de avaliações por estrelas,inteiro,5 a 3819418 no recorte,uso da rede,"valor no momento da coleta, data desconhecida"
+n_resenhas,variável de reconhecimento,Número de resenhas escritas,inteiro,0 a 147696; nunca maior que n_avaliacoes,uso da rede,"não informa o conteúdo das resenhas"
+autor,metadado descritivo,Nome de autoria registrado,texto,não vazio,Goodreads,"pode ser pseudônimo; dado pessoal"
+genero_autor,variável categórica herdada,Gênero atribuído à autoria,categoria,feminino ou masculino,produtor do arquivo (regra desconhecida),"binário; erros detectados na auditoria da Unidade 3"
+pais_nascimento,variável categórica do autor,Local de nascimento informado,texto livre,207 valores com países cidades estados e valores inválidos,perfil do autor no Goodreads,"mistura escalas geográficas e entidades históricas"
+nota_autor,variável numérica do autor,Nota média de toda a obra do autor,decimal,1 a 5,uso da rede,"inclui livros fora do recorte"
+n_avaliacoes_autor,variável numérica do autor,Total de avaliações da obra do autor,inteiro,7 a 21106819,uso da rede,"38 livros têm mais avaliações que o total do autor (incoerência)"

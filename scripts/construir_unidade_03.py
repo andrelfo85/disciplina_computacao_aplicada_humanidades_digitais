@@ -1,0 +1,1474 @@
+"""Gera dados, notebooks e README da Unidade 3."""
+
+from __future__ import annotations
+
+import csv
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+from textwrap import dedent
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile, ZipInfo
+
+import pandas as pd
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+from apoio_colab import adicionar_link_na_abertura, preparacao_colab, tabela_links_colab
+from construir_imagens_unidade_03 import main as construir_imagens
+
+
+RAIZ = Path(__file__).resolve().parents[1]
+UNIDADE = RAIZ / "unidade_03"
+BRUTOS = UNIDADE / "dados" / "brutos"
+INTERMEDIARIOS = UNIDADE / "dados" / "intermediarios"
+DERIVADOS = UNIDADE / "dados" / "derivados"
+DATA_ARQUIVO_DIDATICO = datetime(2026, 7, 31, 12, 0, 0)
+
+
+def md(conteudo: str) -> dict:
+    return {"cell_type": "markdown", "metadata": {}, "source": dedent(conteudo).strip().splitlines(keepends=True)}
+
+
+def code(conteudo: str) -> dict:
+    return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": dedent(conteudo).strip().splitlines(keepends=True)}
+
+
+def salvar_notebook(
+    nome: str,
+    celulas: list[dict],
+    requer_repositorio: bool = False,
+) -> None:
+    publicadas = [adicionar_link_na_abertura(celulas[0], UNIDADE.name, nome)]
+    if requer_repositorio:
+        publicadas.append(
+            code(
+                preparacao_colab(
+                    UNIDADE.name,
+                    pacotes=(
+                        ("openpyxl", "openpyxl>=3.1,<4"),
+                        ("pypdf", "pypdf>=5,<6"),
+                        ("PIL", "Pillow>=11,<12"),
+                    ),
+                )
+            )
+        )
+    publicadas.extend(celulas[1:])
+    doc = {
+        "cells": publicadas,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    (UNIDADE / nome).write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+def salvar_xlsx_reprodutivel(tabela: pd.DataFrame, caminho: Path) -> None:
+    """Grava o XLSX sem datas variáveis no conteúdo ou no contêiner ZIP."""
+
+    with pd.ExcelWriter(caminho, engine="openpyxl") as escritor:
+        tabela.to_excel(escritor, index=False, sheet_name="documentos")
+        escritor.book.properties.created = DATA_ARQUIVO_DIDATICO
+        escritor.book.properties.modified = DATA_ARQUIVO_DIDATICO
+
+    temporario = caminho.with_suffix(".xlsx.tmp")
+    with ZipFile(caminho, "r") as origem, ZipFile(temporario, "w") as destino:
+        for info in origem.infolist():
+            normalizado = ZipInfo(info.filename, (2026, 7, 31, 12, 0, 0))
+            normalizado.compress_type = info.compress_type
+            normalizado.external_attr = info.external_attr
+            normalizado.create_system = info.create_system
+            conteudo = origem.read(info.filename)
+            if info.filename == "docProps/core.xml":
+                conteudo = re.sub(
+                    rb"(<dcterms:modified[^>]*>)[^<]+(</dcterms:modified>)",
+                    rb"\g<1>2026-07-31T12:00:00Z\g<2>",
+                    conteudo,
+                )
+            destino.writestr(normalizado, conteudo)
+    temporario.replace(caminho)
+
+
+def pdf_textual(caminho: Path, texto: str) -> None:
+    seguro = texto.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    fluxo = f"BT /F1 14 Tf 72 720 Td ({seguro}) Tj ET".encode("latin-1")
+    objetos = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(fluxo)).encode() + b" >>\nstream\n" + fluxo + b"\nendstream",
+    ]
+    saida = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for numero, objeto in enumerate(objetos, 1):
+        offsets.append(len(saida))
+        saida.extend(f"{numero} 0 obj\n".encode() + objeto + b"\nendobj\n")
+    xref = len(saida)
+    saida.extend(f"xref\n0 {len(objetos)+1}\n".encode())
+    saida.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        saida.extend(f"{offset:010d} 00000 n \n".encode())
+    saida.extend(f"trailer << /Size {len(objetos)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    caminho.write_bytes(saida)
+
+
+def criar_dados() -> None:
+    for pasta in [BRUTOS, INTERMEDIARIOS, DERIVADOS]:
+        pasta.mkdir(parents=True, exist_ok=True)
+
+    linhas = [
+        ["D001", " Jornal Aurora ", "1890-01-05", "São Paulo", "3550308", "Editorial", "860"],
+        ["D002", "gazeta popular", "06/02/1891", "Sao paulo", "3550308", "notícia", "610"],
+        ["D003", "Correio do Vale", "1892", "Belo Horizonte", "3106200", "Carta", ""],
+        ["D004", "JORNAL AURORA", "1893-03-12", "São  Paulo", "3550308", "editorial ", "940"],
+        ["D005", "Gazeta Popular", "data desconhecida", "Rio de Janeiro", "3304557", "Noticia", "720"],
+        ["D006", "Correio do Vale", "1900-08-20", "Belo Horizonte", "3106200", "carta", "420"],
+        ["D006-copia", " Correio do Vale ", "20/08/1900", "Belo horizonte", "3106200", "Carta", "420"],
+        ["D007", "Boletim Operário", "1901-04-09", "Recife", "2611606", "manifesto", "500"],
+    ]
+    with (BRUTOS / "catalogo_messy.csv").open("w", encoding="utf-8", newline="") as arq:
+        w = csv.writer(arq, delimiter=";")
+        w.writerow(["id_documento", "titulo", "data_documento", "municipio", "codigo_municipio", "genero", "palavras"])
+        w.writerows(linhas)
+
+    salvar_xlsx_reprodutivel(
+        pd.DataFrame(
+            linhas,
+            columns=[
+                "id_documento",
+                "titulo",
+                "data_documento",
+                "municipio",
+                "codigo_municipio",
+                "genero",
+                "palavras",
+            ],
+        ),
+        BRUTOS / "catalogo_messy.xlsx",
+    )
+    metadados = [
+        {"id_documento": "D001", "arquivo_texto": "D001.txt", "temas": ["educação", "progresso"]},
+        {"id_documento": "D002", "arquivo_texto": "D002.txt", "temas": ["trabalho"]},
+        {"id_documento": "D003", "arquivo_texto": None, "temas": ["educação"]},
+    ]
+    (BRUTOS / "metadados.json").write_text(json.dumps(metadados, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    raiz_xml = ET.Element("colecao")
+    for item in metadados[:2]:
+        doc = ET.SubElement(raiz_xml, "documento", id=item["id_documento"])
+        ET.SubElement(doc, "arquivo").text = item["arquivo_texto"]
+        ET.SubElement(doc, "tema").text = item["temas"][0]
+    ET.ElementTree(raiz_xml).write(BRUTOS / "metadados.xml", encoding="utf-8", xml_declaration=True)
+
+    (BRUTOS / "D001.txt").write_text("A escola noturna foi apresentada como sinal de progresso.\n", encoding="utf-8")
+    (BRUTOS / "D002.txt").write_text("O jornal discutiu jornadas de trabalho e instrução.\n", encoding="utf-8")
+    pdf_textual(BRUTOS / "documento_textual.pdf", "Documento D001 com camada textual")
+
+    referencia_ocr = "ESCOLA NOTURNA E TRABALHO — 1890"
+    imagem = Image.new("L", (1400, 260), "#f8f3e7")
+    desenho = ImageDraw.Draw(imagem)
+    try:
+        fonte_ocr = ImageFont.truetype("DejaVuSerif.ttf", 58)
+    except OSError:
+        fonte_ocr = ImageFont.load_default()
+    desenho.text((80, 86), referencia_ocr, font=fonte_ocr, fill="#26231f")
+    desenho.line((55, 55, 1345, 55), fill="#b7aa91", width=2)
+    desenho.line((55, 205, 1345, 205), fill="#b7aa91", width=2)
+    imagem.save(BRUTOS / "pagina_digitalizada.png")
+
+    degradada = imagem.resize((770, 143)).resize((1400, 260))
+    degradada = degradada.rotate(0.65, resample=Image.Resampling.BICUBIC, fillcolor="#f8f3e7")
+    degradada = degradada.filter(ImageFilter.GaussianBlur(1.15))
+    marcas = ImageDraw.Draw(degradada)
+    for x, y, raio in [(155, 92, 15), (393, 170, 9), (690, 72, 12), (1020, 181, 17), (1275, 105, 8)]:
+        marcas.ellipse((x - raio, y - raio, x + raio, y + raio), fill="#cfc3ad")
+    for x in [245, 744, 1130]:
+        marcas.line((x, 38, x + 5, 222), fill="#ded5c4", width=3)
+    degradada.save(BRUTOS / "pagina_digitalizada_degradada.png")
+
+    (BRUTOS / "ocr_referencia.txt").write_text(referencia_ocr + "\n", encoding="utf-8")
+    (BRUTOS / "ocr_precomputado.txt").write_text(referencia_ocr + "\n", encoding="utf-8")
+    (BRUTOS / "ocr_precomputado_degradado.txt").write_text(
+        "ESC0LA NOTURNA E TRABALH0 — 189O\n", encoding="utf-8"
+    )
+
+    largo = pd.DataFrame({
+        "id_documento": ["D001", "D002", "D003"],
+        "educacao_1890": [3, 0, 2], "trabalho_1890": [1, 4, 0],
+        "educacao_1900": [2, 1, 3], "trabalho_1900": [2, 5, 1],
+    })
+    largo.to_csv(BRUTOS / "indicadores_largos.csv", index=False)
+
+    municipios = pd.DataFrame([
+        ["3550308", "São Paulo", "SP"], ["3106200", "Belo Horizonte", "MG"],
+        ["3304557", "Rio de Janeiro", "RJ"], ["2611606", "Recife", "PE"],
+    ], columns=["codigo_municipio", "nome_municipio_ibge", "uf"])
+    municipios.to_csv(BRUTOS / "extrato_codigos_municipios_ibge.csv", index=False)
+    proveniencia = {
+        "arquivo": "extrato_codigos_municipios_ibge.csv",
+        "fonte": "IBGE — Códigos dos Municípios",
+        "url": "https://www.ibge.gov.br/explica/codigos-dos-municipios.php",
+        "data_de_acesso": "2026-07-31",
+        "nota": "extrato didático de quatro registros; códigos devem ser reverificados antes de reutilização",
+    }
+    (BRUTOS / "proveniencia_base_publica.json").write_text(json.dumps(proveniencia, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def guia() -> list[dict]:
+    return [
+        md("""
+        # Unidade 3 — Guia de estudo
+
+        ## Como transformar fontes em dados analisáveis?
+
+        **Problema orientador:** como preparar documentos e registros produzidos em
+        formatos diferentes sem perder a ligação com as fontes e decisões?
+
+        O protocolo da Unidade 2 definiu o que coletar. Agora construiremos uma
+        primeira base processável. “Limpar” não significa tornar os dados neutros:
+        significa aplicar regras explícitas, preservar originais, testar resultados e
+        documentar perdas. Rawson e Muñoz (2019) alertam que a ideia de limpeza pode
+        ocultar trabalho interpretativo e relações de autoridade.
+
+        ![Fontes em papel, imagem e tabela atravessam camadas transparentes de transformação e produzem tabelas, relações e segmentos de texto sempre ligados aos originais preservados.](imagens/00_abertura_conceitual.png)
+
+        A ilustração antecipa o argumento central: transformar não rompe o vínculo
+        com a fonte. Cada produto derivado precisa manter um caminho de retorno às
+        entradas, regras e decisões que o produziram.
+        """),
+        md("""
+        O problema orientador define a exigência de preservar vínculos durante a
+        transformação. Para realizá-la, precisamos decompor o trabalho em etapas nas
+        quais cada produto possa ser verificado antes de alimentar o seguinte.
+
+        ## Objetivos e percurso
+
+        | Notebook | Questão | Produto |
+        |---|---|---|
+        | 00 | Como trabalhar sem perder rastros? | Diagnóstico |
+        | 01 | Como ler formatos e extrair texto? | Inventário técnico |
+        | 02 | Como estruturar e corrigir com cautela? | Tabela intermediária |
+        | 03 | Como juntar e integrar sem criar casos? | Base integrada |
+        | 04 | A base está processável e auditável? | Primeira versão da base |
+
+        A unidade usa dados fictícios deliberadamente inconsistentes e um pequeno
+        extrato didático dos códigos de municípios do IBGE, acompanhado de
+        proveniência. Não há coleta pela internet durante a execução.
+
+        ![Quatro etapas ligam leitura de formatos, estruturação, integração e empacotamento; os dados brutos permanecem preservados e uma seta de retorno representa auditoria e revisão.](imagens/00_percurso_unidade.svg)
+
+        O percurso é cumulativo: cada notebook produz uma representação que será
+        retomada pelo seguinte. Testes e limites podem exigir retorno a qualquer
+        decisão anterior.
+        """),
+        md("""
+        ## Como ler a pasta `dados`
+
+        A pasta está organizada como um fluxo de transformação. Os arquivos em
+        `brutos/` são entradas preservadas; `intermediarios/` guarda um resultado
+        verificável ainda sujeito a integração; e `derivados/` reúne produtos
+        reconstruíveis destinados à análise. Portanto, os arquivos não são exemplos
+        soltos: cada um permite examinar um problema metodológico específico.
+
+        ### Entradas preservadas: `brutos/`
+
+        | Arquivo | O que representa | Problema ao qual se relaciona | Uso principal |
+        |---|---|---|---|
+        | `brutos/catalogo_messy.csv` | Catálogo fictício delimitado por ponto e vírgula, com datas, grafias, ausências e possível duplicata deliberadamente inconsistentes. | Importação parametrizada, diagnóstico de qualidade, padronização cautelosa e detecção de duplicatas. | Notebooks 01 e 02. |
+        | `brutos/catalogo_messy.xlsx` | O mesmo catálogo em uma planilha Excel. | Como formatos diferentes exigem leitores e parâmetros próprios, ainda que representem conteúdo semelhante. | Notebook 01. |
+        | `brutos/metadados.json` | Lista hierárquica que liga documentos a arquivos textuais e a zero ou vários temas. | Leitura de dados semiestruturados e representação de relações 1:N. | Notebooks 01 e 03. |
+        | `brutos/metadados.xml` | Pequeno recorte dos metadados em estrutura XML. | Diferenças de sintaxe, hierarquia e extração entre formatos semiestruturados. | Notebook 01. |
+        | `brutos/D001.txt` | Texto simples associado ao documento D001. | Leitura de texto não estruturado e manutenção do vínculo entre arquivo e identificador. | Notebooks 01 e 03. |
+        | `brutos/D002.txt` | Texto simples associado ao documento D002. | Integração de conteúdo textual com o catálogo sem copiar listas ou perder a chave documental. | Notebooks 01 e 03. |
+        | `brutos/documento_textual.pdf` | PDF sintético que já contém uma camada textual. | Distinguir extração de texto de PDF nascido digitalmente de OCR aplicado a imagem. | Notebook 01. |
+        | `brutos/pagina_digitalizada.png` | Imagem sintética limpa de uma linha tipográfica. | Entrada controlada para observar reconhecimento óptico de caracteres. | Notebook 01. |
+        | `brutos/pagina_digitalizada_degradada.png` | Versão da mesma imagem com redução, inclinação, desfoque e marcas. | Efeito da qualidade material e da digitalização sobre os erros de OCR. | Notebook 01. |
+        | `brutos/ocr_referencia.txt` | Transcrição correta usada como referência de controle. | Avaliação do OCR por comparação com uma transcrição validada; não é uma saída automática. | Notebook 01. |
+        | `brutos/ocr_precomputado.txt` | Saída de OCR previamente calculada para a imagem limpa. | Permitir o experimento offline e medir erros mesmo sem Tesseract instalado. | Notebook 01. |
+        | `brutos/ocr_precomputado_degradado.txt` | Saída previamente calculada para a imagem degradada, contendo erros deliberados. | Comparar CER e WER e mostrar que OCR produz hipótese textual, não transcrição garantida. | Notebook 01. |
+        | `brutos/indicadores_largos.csv` | Tabela fictícia com tema e período codificados nos nomes das colunas. | Diferença entre formatos largo e longo e explicitação das dimensões tema e período. | Notebooks 02 e 03. |
+        | `brutos/extrato_codigos_municipios_ibge.csv` | Extrato didático de quatro códigos municipais de uma fonte pública real. | Enriquecimento por junção, compatibilidade de chaves e cardinalidade muitos-para-um. | Notebooks 01 e 03. |
+        | `brutos/proveniencia_base_publica.json` | Fonte, URL, data de acesso e ressalva de reutilização do extrato do IBGE. | Proveniência e responsabilidade no uso de uma base pública; o CSV não documenta sozinho sua origem. | Notebook 01 e rastreamento do pacote final. |
+
+        Os arquivos de OCR pré-computado permanecem nessa camada porque funcionam
+        como entradas preservadas para o experimento reproduzível. Eles não devem ser
+        confundidos nem com as imagens que deram origem ao reconhecimento nem com a
+        transcrição de referência usada para avaliá-lo.
+
+        ### Resultado verificável: `intermediarios/`
+
+        | Arquivo | O que representa | Problema ao qual se relaciona | Uso principal |
+        |---|---|---|---|
+        | `intermediarios/catalogo_normalizado.csv` | Versão do catálogo após regras explícitas de normalização, representação de datas incertas e sinalização de possíveis duplicatas. | Preservar decisões e incertezas entre a entrada bruta e a integração, sem sobrescrever o original. | Produzido no Notebook 02 e consumido no Notebook 03. |
+
+        ### Produtos para análise: `derivados/`
+
+        | Arquivo | O que representa | Problema ao qual se relaciona | Uso principal |
+        |---|---|---|---|
+        | `derivados/documentos_processaveis.csv` | Tabela principal já normalizada e enriquecida com município e, quando disponível, texto. | Integrar entidades sem multiplicar documentos e preparar uma unidade documental analisável. | Produzido no Notebook 03 e auditado na oficina. |
+        | `derivados/documentos_temas.csv` | Tabela de relações, com uma linha para cada associação entre documento e tema. | Representar cardinalidade 1:N sem armazenar vários temas em uma única célula. | Produzido no Notebook 03 e auditado na oficina. |
+        | `derivados/indicadores_longos.csv` | Indicadores reorganizados com tema e período em colunas próprias. | Produzir estrutura longa adequada a agrupamentos e análises posteriores. | Produzido no Notebook 03 e auditado na oficina. |
+
+        Em síntese, o percurso é **fontes preservadas → transformação verificável →
+        produtos analisáveis**. Os notebooks devem reconstruir as duas últimas
+        camadas; por isso, não edite manualmente os arquivos brutos, intermediários
+        ou derivados.
+
+        Com esse mapa, podemos inspecionar o catálogo bruto e contar as entradas sem
+        ainda corrigi-las. A finalidade da primeira leitura é reconhecer o material,
+        não começar silenciosamente a limpeza.
+        """),
+        code("""
+        from pathlib import Path
+        import pandas as pd
+
+        raiz_dados = Path("dados")
+        bruto = pd.read_csv(raiz_dados / "brutos" / "catalogo_messy.csv", sep=";")
+        print("Registros brutos:", len(bruto))
+        print("Arquivos brutos:", len(list((raiz_dados / "brutos").iterdir())))
+        bruto.head(3)
+        """),
+        md("""
+        A inspeção apresentou os materiais que atravessarão o percurso. Antes de
+        transformá-los, precisamos estabelecer onde cada estado dos dados ficará e
+        como será possível retornar ao ponto de entrada.
+
+        ## Regra de ouro: camadas, não sobrescrita
+
+        - `brutos/`: cópias recebidas, imutáveis;
+        - `intermediarios/`: resultados de etapas verificáveis;
+        - `derivados/`: produtos destinados à análise;
+        - notebooks: ordem e justificativa das operações.
+
+        Uma cópia bruta não é “verdade original”; ela é o ponto de entrada preservado
+        do fluxo. Proveniência continua necessária.
+
+        Separar as camadas protege os dados recebidos, mas não identifica quais
+        operações serão necessárias em cada projeto. O diagnóstico antecipa essas
+        operações e os riscos que deverão ser registrados ao longo da unidade.
+
+        ## U03-A01 — Diagnóstico
+
+        Que transformações seu projeto exigirá? Quais podem alterar sentido, unidade
+        ou quantidade de registros? **Resposta:** Escreva aqui.
+        """),
+        md("""
+        As respostas do diagnóstico indicam transformações e riscos previstos. O
+        produto reúne as evidências necessárias para mostrar que essas operações
+        foram executadas, testadas e documentadas de maneira auditável.
+
+        ## Produto e avaliação
+
+        A entrega incluirá inventário, código executável, tabela processável, log de
+        transformações, testes de chaves/junções, amostra de controle de OCR e limites.
+        Frequências substantivas, gráficos e hipóteses exploratórias pertencem à
+        Unidade 4. Consulte `referencias.md` para leituras completas. Comece pelo
+        Notebook 01, no qual os formatos recebidos determinarão leitores, parâmetros
+        e estratégias de extração diferentes.
+        """),
+    ]
+
+
+def formatos() -> list[dict]:
+    return [
+        md("""
+        # Formatos, importação e extração
+
+        O guia separou dados brutos, intermediários e derivados. Este notebook começa
+        pelo ponto de entrada desse fluxo: reconhecer o que cada arquivo contém e
+        escolher uma operação de leitura que preserve sua estrutura e proveniência.
+
+        ## Linha do tempo: formatos surgem para problemas diferentes
+
+        Formatos não aparecem todos no mesmo contexto nem possuem necessariamente uma
+        única “data de criação”. Em alguns casos conhecemos o início do projeto; em
+        outros, o primeiro rascunho público ou a data de uma padronização posterior.
+        A linha do tempo usa o marco mais bem documentado e identifica sua natureza.
+
+        ![Linha do tempo mostra HTML em 1990, XML entre 1996 e 1998, JSON e YAML em 2001, a documentação do CSV em 2005 e a padronização do XLSX em 2006.](imagens/01_linha_tempo_formatos.svg)
+
+        | Marco | Formato | Objetivo inicial ou problema enfrentado | Natureza da data |
+        |---|---|---|---|
+        | 1990 | HTML | publicar documentos com ligações no projeto World Wide Web | criação no projeto Web |
+        | 1996 → 1998 | XML | oferecer uma forma simplificada de SGML para informação estruturada e intercâmbio na Web | primeiro *Working Draft* → Recomendação W3C |
+        | 2001 | JSON | representar objetos e listas em uma sintaxe textual pequena e independente de linguagem para intercâmbio | apresentação pública no JSON.org |
+        | 2001 | YAML | serializar estruturas de dados com prioridade para legibilidade humana e interação com linguagens de programação | primeiros rascunhos públicos |
+        | 2005 | CSV | registrar convenções comuns para intercambiar tabelas planas em texto | RFC 4180; documentação de uso anterior, não criação |
+        | 2006 | XLSX / Office Open XML | representar e empacotar documentos de escritório, incluindo planilhas, com vocabulários baseados em XML | primeira edição da ECMA-376 |
+
+        A posição do CSV exige atenção: a RFC 4180 afirma que o formato já era usado
+        havia bastante tempo. Portanto, 2005 é a data de sua documentação em RFC, não
+        um “aniversário” do CSV. A cronologia também corrige outra simplificação comum:
+        XLSX não foi criado em 2001; o marco normativo adotado aqui é a primeira edição
+        da ECMA-376, publicada em 2006.
+
+        HTML e YAML entram como contexto comparativo, embora não sejam manipulados nos
+        exercícios deste notebook. O percurso prático se concentra em CSV, XLSX, JSON
+        e XML, além de TXT e PDF, porque são os formatos presentes na pasta de dados.
+        A história ajuda a perceber que a escolha entre eles não é uma escala do
+        “mais antigo” ao “mais moderno”: cada formato favorece objetivos distintos.
+        Os documentos históricos e as especificações usados para estabelecer os
+        marcos — W3C, IETF/RFC, ECMA e YAML — estão listados em `referencias.md`.
+
+        ## 1. Formato é estrutura e *affordance* (possibilidades de ação)
+
+        Aqui, *affordance* designa as ações que um formato facilita, dificulta ou
+        condiciona para quem o utiliza.
+
+        CSV registra uma tabela sem fórmulas ou tipos ricos; XLSX pode conter várias
+        planilhas, fórmulas e formatação; JSON e XML expressam hierarquias; TXT não
+        define internamente como interpretar seu conteúdo; PDF busca preservar uma
+        apresentação de página e pode conter texto, imagem ou ambos. Extensão não
+        garante conteúdo nem qualidade.
+
+        ![Quatro painéis comparam CSV como grade tabular, XLSX como pasta com planilhas, JSON como árvore de objetos e listas e XML como árvore de elementos aninhados.](imagens/01_formatos_estruturas.svg)
+
+        A figura destaca a estrutura predominante e as operações favorecidas por cada
+        formato. CSV e XLSX podem representar tabelas, mas uma pasta XLSX pode reunir
+        abas, fórmulas e formatação. JSON e XML preservam hierarquias, embora usem
+        sintaxes e formas de navegação diferentes. Em todos os casos, a extensão
+        orienta a escolha inicial do leitor, mas parâmetros e testes confirmam se a
+        interpretação foi correta.
+        """),
+        code("""
+        import json
+        from pathlib import Path
+        from xml.etree import ElementTree as ET
+        import pandas as pd
+
+        pasta = Path("dados/brutos")
+        csv_df = pd.read_csv(pasta / "catalogo_messy.csv", sep=";")
+        xlsx_df = pd.read_excel(pasta / "catalogo_messy.xlsx", sheet_name="documentos")
+        json_data = json.loads((pasta / "metadados.json").read_text(encoding="utf-8"))
+        xml_raiz = ET.parse(pasta / "metadados.xml").getroot()
+        txt = (pasta / "D001.txt").read_text(encoding="utf-8")
+
+        print("CSV/XLSX iguais nas dimensões:", csv_df.shape == xlsx_df.shape)
+        print("Registros JSON:", len(json_data), "| XML:", len(xml_raiz))
+        print("TXT:", txt.strip())
+        """),
+        md("""
+        As saídas confirmam que os leitores devolveram objetos utilizáveis, mas esse
+        sucesso técnico ainda não informa se a estrutura foi compreendida corretamente.
+        A interpretação começa comparando o resultado com aquilo que esperávamos ler.
+
+        ### Interpretação
+
+        Leitores diferentes retornam objetos diferentes. Importar com sucesso não
+        prova que encoding, separador, planilha, hierarquia ou tipos foram interpretados
+        corretamente. Registre parâmetros, versão da fonte e testes esperados.
+        """),
+        md("""
+        A seção anterior tratou da **estrutura interna** dos arquivos: leitor,
+        separador, planilha, hierarquia e tipos. Quando os dados vêm de uma instituição
+        externa, surge uma segunda exigência: documentar **qual versão** foi utilizada,
+        de onde veio, quando foi acessada e qual recorte foi preservado.
+
+        ## 2. Base pública: cópia local, versão e proveniência
+
+        O arquivo `extrato_codigos_municipios_ibge.csv` é uma cópia local pequena da
+        tabela do IBGE. Ele permite repetir o exercício em sala sem depender da rede e
+        mantém estável a entrada usada pelo código. Essa conveniência técnica não torna
+        a cópia autossuficiente: uma base pública pode mudar, e citar apenas “IBGE” não
+        identifica a versão efetivamente analisada.
+
+        Por isso, o CSV é acompanhado por `proveniencia_base_publica.json`, que registra
+        fonte, endereço, data de acesso, recorte e ressalva de reutilização. Os dois
+        arquivos respondem a perguntas complementares:
+
+        - o CSV responde **quais registros e campos foram preservados?**;
+        - o JSON responde **de onde veio esta cópia e em que condições ela pode ser
+          compreendida e atualizada?**
+
+        No código seguinte, `dtype={"codigo_municipio": "string"}` também explicita uma
+        decisão semântica: o código municipal é um identificador, não uma quantidade
+        sobre a qual se devam realizar operações aritméticas.
+        """),
+        code("""
+        municipios = pd.read_csv(
+            pasta / "extrato_codigos_municipios_ibge.csv",
+            dtype={"codigo_municipio": "string"},
+        )
+        proveniencia = json.loads(
+            (pasta / "proveniencia_base_publica.json").read_text(encoding="utf-8")
+        )
+        print(proveniencia["fonte"], "— acesso:", proveniencia["data_de_acesso"])
+        municipios
+        """),
+        md("""
+        Com o CSV, tratamos uma fonte externa já organizada como tabela: foi necessário
+        interpretar sua estrutura e documentar sua versão. Agora mudaremos de tipo de
+        objeto. Documentos orientados à página não oferecem diretamente linhas e
+        colunas; antes de escolher uma técnica, precisamos descobrir se o PDF contém
+        caracteres codificados ou apenas imagem.
+
+        ## 3. Extração de PDF não é OCR
+
+        Se o PDF contém caracteres, um leitor pode extrair a camada textual. Se cada
+        página é apenas imagem, a extração retorna pouco ou nada e será necessário OCR.
+        Mesmo PDF com texto pode ter ordem de leitura problemática, hifenização ou
+        caracteres incorretos.
+
+        ![Um arquivo PDF passa pelo teste de texto selecionável: quando há texto, extrai-se a camada textual; quando não há, aplica-se OCR; as duas rotas exigem avaliação contra a página.](imagens/01_pdf_texto_imagem_ocr.svg)
+
+        O diagrama evita uma confusão frequente: OCR não é sinônimo de “abrir PDF”.
+        Primeiro se diagnostica o conteúdo; depois se escolhe e avalia a operação.
+        """),
+        code("""
+        from pypdf import PdfReader
+
+        leitor = PdfReader(pasta / "documento_textual.pdf")
+        texto_pdf = "\\n".join(pagina.extract_text() or "" for pagina in leitor.pages)
+        print(texto_pdf.strip())
+        """),
+        md("""
+        A extração anterior acessou uma camada textual já presente no PDF. Quando essa
+        camada não existe ou é inadequada, o texto precisa ser estimado a partir dos
+        pixels; por isso, o OCR deve ser tratado como hipótese de transcrição.
+
+        ## 4. OCR como hipótese de transcrição
+
+        OCR reconhece caracteres em imagem. Resolução, inclinação, ruído, layout,
+        fonte e idioma afetam o resultado. A documentação do Tesseract recomenda
+        inspecionar e preparar imagens quando necessário. A transcrição deve ser
+        vinculada à imagem, à ferramenta, aos parâmetros e a uma avaliação de erro.
+
+        As duas imagens abaixo são **simulações didáticas**, não documentos
+        históricos. Elas contêm a mesma linha: a primeira está limpa; a segunda foi
+        reduzida, ampliada, inclinada, desfocada e marcada de forma controlada.
+
+        ![Linha tipográfica sintética limpa usada como referência no experimento controlado de reconhecimento óptico de caracteres.](dados/brutos/pagina_digitalizada.png)
+
+        ![A mesma linha tipográfica sintética após redução, ampliação, inclinação, desfoque e marcas controladas que dificultam o reconhecimento óptico de caracteres.](dados/brutos/pagina_digitalizada_degradada.png)
+        """),
+        code("""
+        import shutil
+        import subprocess
+
+        entradas_ocr = [
+            ("imagem limpa", pasta / "pagina_digitalizada.png", pasta / "ocr_precomputado.txt"),
+            ("imagem degradada", pasta / "pagina_digitalizada_degradada.png", pasta / "ocr_precomputado_degradado.txt"),
+        ]
+
+        def reconhecer_ou_carregar(imagem, precomputado):
+            if shutil.which("tesseract"):
+                try:
+                    processo = subprocess.run(
+                        ["tesseract", str(imagem), "stdout", "-l", "eng", "--psm", "7"],
+                        capture_output=True, text=True, check=True,
+                    )
+                    return processo.stdout.strip(), "Tesseract executado agora"
+                except subprocess.CalledProcessError:
+                    pass
+            return (
+                precomputado.read_text(encoding="utf-8").strip(),
+                "saída pré-computada fornecida com o material",
+            )
+
+        resultados_ocr = []
+        for condicao, imagem, precomputado in entradas_ocr:
+            transcricao, origem = reconhecer_ou_carregar(imagem, precomputado)
+            resultados_ocr.append({"condição": condicao, "transcrição": transcricao, "origem": origem})
+
+        pd.DataFrame(resultados_ocr)
+        """),
+        code("""
+        referencia = (pasta / "ocr_referencia.txt").read_text(encoding="utf-8").strip()
+
+        def distancia_edicao(a, b):
+            anterior = list(range(len(b) + 1))
+            for i, item_a in enumerate(a, 1):
+                atual = [i]
+                for j, item_b in enumerate(b, 1):
+                    atual.append(min(
+                        atual[-1] + 1,
+                        anterior[j] + 1,
+                        anterior[j - 1] + (item_a != item_b),
+                    ))
+                anterior = atual
+            return anterior[-1]
+
+        comparacao = []
+        for resultado in resultados_ocr:
+            observado = resultado["transcrição"]
+            comparacao.append({
+                "condição": resultado["condição"],
+                "erros em caracteres": distancia_edicao(referencia, observado),
+                "CER": distancia_edicao(referencia, observado) / len(referencia),
+                "erros em palavras": distancia_edicao(referencia.split(), observado.split()),
+                "WER": distancia_edicao(referencia.split(), observado.split()) / len(referencia.split()),
+            })
+
+        pd.DataFrame(comparacao).round({"CER": 3, "WER": 3})
+        """),
+        md("""
+        As duas transcrições e suas métricas permitem comparar condições controladas.
+        Antes de decidir se uma saída é aceitável, precisamos relacionar a magnitude
+        do erro à finalidade concreta para a qual o texto será utilizado.
+
+        ### Como interpretar a comparação
+
+        CER é a taxa de erro por caractere; WER, por palavra. Zero significa
+        coincidência com a transcrição de referência nesta amostra. Valores maiores
+        indicam mais edições necessárias, mas **não decidem sozinhos** se o texto é
+        adequado: busca exploratória, citação e análise lexical exigem tolerâncias
+        diferentes. Uma referência também pode conter erro humano; por isso, a
+        página e o protocolo de transcrição continuam indispensáveis.
+
+        A comparação de CER e WER transforma diferenças visíveis em indicadores de
+        qualidade, mas a adequação continua dependente do uso pretendido. O inventário
+        técnico reúne formato, operação, parâmetro, teste e finalidade para todas as
+        fontes do projeto.
+
+        ## U03-A02 — Atividade — inventário técnico
+
+        Para cada fonte do projeto, registre formato, estrutura interna, leitor,
+        encoding/planilha/nó, presença de texto, necessidade de OCR, riscos, teste e
+        saída prevista. Diferencie claramente dado recebido, texto extraído e texto
+        reconhecido. **Inventário:** Escreva aqui.
+
+        Ao preencher o inventário, o estudante torna explícito como cada entrada será
+        lida e avaliada. A síntese fixa o princípio que deverá acompanhar a próxima
+        etapa, quando essas representações serão reorganizadas e normalizadas.
+
+        ## Síntese
+
+        A importação é interpretação técnica. O objetivo não é converter tudo para um
+        único formato sem crítica, mas produzir representações adequadas, vinculadas e
+        testáveis. Leve o inventário ao Notebook 02: ele orientará a unidade da linha,
+        as regras de transformação e os testes de qualidade.
+        """),
+    ]
+
+
+def limpeza() -> list[dict]:
+    return [
+        md("""
+        # Estrutura tabular, limpeza e qualidade
+
+        O Notebook 01 produziu representações legíveis e um inventário de riscos.
+        Agora precisamos organizar essas representações segundo unidades explícitas e
+        aplicar correções sem apagar os valores recebidos ou suas incertezas.
+
+        ## 1. Uma variável por coluna, uma observação por linha
+
+        A estrutura tabular depende da unidade de análise. Valores atômicos e nomes de
+        campos estáveis facilitam seleção e junção, mas não determinam sozinhos a
+        ontologia correta. Tabelas separadas podem representar documentos, pessoas,
+        lugares e relações sem repetir tudo em uma única linha.
+        """),
+        code("""
+        import pandas as pd
+        bruto = pd.read_csv("dados/brutos/catalogo_messy.csv", sep=";", dtype={"codigo_municipio": "string"})
+        bruto.info()
+        """),
+        md("""
+        A inspeção da tabela mostra que colunas e linhas já carregam decisões sobre
+        entidades e observações. A comparação entre formatos largo e longo torna
+        visível como uma reorganização pode mudar precisamente a unidade da linha.
+
+        ## 2. Largo e longo
+
+        No formato largo, período e tema aparecem nos nomes das colunas. No longo,
+        essas dimensões viram valores. A transformação altera a unidade da linha: de
+        documento para combinação documento–tema–período.
+
+        ![Uma tabela larga com uma linha por documento é reorganizada em tabela longa com uma linha por combinação documento, tema e período, sem resumir os valores.](imagens/02_largo_longo.svg)
+
+        Observe que `melt` não apenas muda a aparência: ele redefine o que cada linha
+        representa. Essa unidade precisa constar no dicionário de dados.
+        """),
+        code("""
+        largo = pd.read_csv("dados/brutos/indicadores_largos.csv")
+        longo = largo.melt(id_vars="id_documento", var_name="tema_periodo", value_name="ocorrencias")
+        partes = longo["tema_periodo"].str.extract(r"(?P<tema>.+)_(?P<periodo>\d{4})")
+        longo = pd.concat([longo[["id_documento", "ocorrencias"]], partes], axis=1)
+        print("Largo:", largo.shape, "| Longo:", longo.shape)
+        longo.head(6)
+        """),
+        md("""
+        A transformação para o formato longo reorganiza valores sem precisar apagar a
+        entrada. O mesmo princípio vale para correções textuais: em vez de substituir
+        silenciosamente, criaremos uma representação normalizada ao lado do original.
+
+        ## 3. Preservar original, criar versão normalizada
+
+        Não sobrescreveremos títulos, municípios ou gêneros. A coluna original permite
+        auditar o mapa de equivalências e recuperar distinções apagadas por uma regra.
+        A remoção de acentos pode ajudar correspondência aproximada, mas não deve
+        substituir automaticamente a grafia de apresentação.
+        """),
+        code("""
+        import re
+        import unicodedata
+
+        def chave_textual(valor):
+            if pd.isna(valor):
+                return pd.NA
+            texto = " ".join(str(valor).strip().lower().split())
+            texto = "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn")
+            return texto
+
+        trabalho = bruto.copy()
+        trabalho["titulo_chave"] = trabalho["titulo"].map(chave_textual)
+        trabalho["municipio_chave"] = trabalho["municipio"].map(chave_textual)
+        mapa_generos = {"editorial": "editorial", "notícia": "notícia", "noticia": "notícia", "carta": "carta", "manifesto": "manifesto"}
+        trabalho["genero_original"] = trabalho["genero"]
+        trabalho["genero_padronizado"] = trabalho["genero"].map(chave_textual).map(mapa_generos)
+        trabalho[["titulo", "titulo_chave", "genero_original", "genero_padronizado"]]
+        """),
+        md("""
+        As chaves normalizadas facilitam comparações, mas cada tipo de campo exige uma
+        regra própria. Datas incompletas, identificadores numéricos e valores ausentes
+        não podem ser tratados como simples variações ortográficas.
+
+        ## 4. Datas, códigos e ausências
+
+        Código de município é identificador textual, não quantidade. Datas parciais
+        não devem receber dia e mês inventados. Um parser explícito separa datas
+        completas, anos isolados e valores desconhecidos; guardar o original, a
+        precisão e a razão evita transformar incerteza em falsa exatidão.
+
+        ![O valor de data recebido é preservado, passa por uma regra explícita e produz representação derivada, precisão e razão; log e testes permitem retornar à fonte.](imagens/02_transformacao_rastreavel.svg)
+
+        No exemplo, uma data completa pode ocupar `data_normalizada`; um ano isolado
+        ocupa `ano_documento`, mas não recebe dia e mês arbitrários. A coluna
+        `precisao_data` distingue `dia`, `ano`, `desconhecida` e, se ocorrer, `inválida`.
+        """),
+        code("""
+        trabalho["data_original"] = trabalho["data_documento"]
+
+        def decompor_data(valor):
+            texto = str(valor).strip()
+            formatos = [
+                (r"\d{4}-\d{2}-\d{2}", "%Y-%m-%d"),
+                (r"\d{2}/\d{2}/\d{4}", "%d/%m/%Y"),
+            ]
+            for padrao, formato in formatos:
+                if re.fullmatch(padrao, texto):
+                    data = pd.to_datetime(texto, format=formato, errors="coerce")
+                    if pd.notna(data):
+                        return data, data.year, "dia", pd.NA
+                    return pd.NaT, pd.NA, "inválida", "data impossível no calendário"
+            if re.fullmatch(r"\d{4}", texto):
+                return pd.NaT, int(texto), "ano", "dia e mês não informados"
+            if texto.casefold() == "data desconhecida":
+                return pd.NaT, pd.NA, "desconhecida", "data não informada"
+            return pd.NaT, pd.NA, "inválida", "formato não reconhecido"
+
+        datas = trabalho["data_original"].apply(decompor_data).apply(pd.Series)
+        datas.columns = ["data_normalizada", "ano_documento", "precisao_data", "razao_data_ausente"]
+        datas["ano_documento"] = datas["ano_documento"].astype("Int64")
+        trabalho[datas.columns] = datas
+        trabalho["palavras"] = pd.to_numeric(trabalho["palavras"], errors="coerce")
+        trabalho["razao_palavras_ausente"] = trabalho["palavras"].isna().map({True: "não contado", False: pd.NA})
+        trabalho[["data_original", "data_normalizada", "ano_documento", "precisao_data", "razao_data_ausente", "palavras"]]
+        """),
+        md("""
+        Depois de normalizar campos e representar ausências, podemos comparar registros
+        com maior consistência. Ainda assim, semelhança não prova identidade: ela apenas
+        produz candidatos a duplicata que precisam de revisão documental.
+
+        ## 5. Duplicatas são uma hipótese
+
+        IDs repetidos detectam um tipo de duplicata. Registros de um mesmo documento
+        com IDs diferentes exigem combinação de campos e revisão. Remover pelo título
+        isolado poderia apagar edições legítimas.
+        """),
+        code("""
+        trabalho["possivel_duplicata"] = trabalho.duplicated(
+            subset=["titulo_chave", "data_normalizada", "municipio_chave", "palavras"],
+            keep=False,
+        )
+        trabalho.loc[trabalho["possivel_duplicata"], ["id_documento", "titulo", "data_original", "palavras"]]
+        """),
+        md("""
+        As regras anteriores modificaram representações, registraram incertezas e
+        sinalizaram casos para revisão. Antes de usar essa tabela em junções, precisamos
+        resumir o que mudou e exportar uma camada intermediária reproduzível.
+
+        ## 6. Relatório e exportação intermediária
+
+        Antes/depois deve quantificar transformações, falhas e casos para revisão. A
+        saída intermediária não substitui os dados brutos.
+        """),
+        code("""
+        relatorio = {
+            "linhas": len(trabalho),
+            "datas_sem_precisao_de_dia": int(trabalho["data_normalizada"].isna().sum()),
+            "datas_parciais_ano": int(trabalho["precisao_data"].eq("ano").sum()),
+            "datas_desconhecidas": int(trabalho["precisao_data"].eq("desconhecida").sum()),
+            "datas_invalidas": int(trabalho["precisao_data"].eq("inválida").sum()),
+            "palavras_ausentes": int(trabalho["palavras"].isna().sum()),
+            "generos_sem_mapeamento": int(trabalho["genero_padronizado"].isna().sum()),
+            "registros_em_grupos_de_possiveis_duplicatas": int(trabalho["possivel_duplicata"].sum()),
+        }
+        trabalho.to_csv("dados/intermediarios/catalogo_normalizado.csv", index=False)
+        pd.Series(relatorio, name="quantidade")
+        """),
+        md("""
+        O relatório quantitativo informa quantos casos foram afetados, mas não explica
+        por que cada decisão foi tomada. O log acrescenta regra, justificativa, teste,
+        reversibilidade e responsabilidade a esse resumo.
+
+        ## U03-A03 — Atividade — log de transformação
+
+        Registre campo, problema, regra, justificativa, valores afetados, teste,
+        reversibilidade e responsável. Explique que distinção cada regra pode apagar.
+        **Log:** Escreva aqui.
+
+        O log da atividade liga cada valor derivado ao original e à regra aplicada. A
+        síntese recupera essa relação antes de a tabela intermediária participar de
+        junções com outras entidades.
+
+        ## Síntese
+
+        Limpeza responsável acrescenta rastreabilidade. Ela não transforma incerteza
+        substantiva em certeza técnica nem autoriza exclusão silenciosa. No Notebook
+        03, a tabela intermediária e seu log serão usados para declarar chaves,
+        cardinalidades e vínculos entre documentos, textos, temas e indicadores.
+        """),
+    ]
+
+
+def integracao() -> list[dict]:
+    return [
+        md("""
+        # Junções, integração e reprodutibilidade
+
+        O Notebook 02 produziu uma tabela intermediária com campos normalizados,
+        incertezas representadas e possíveis duplicatas sinalizadas. Este notebook
+        examina o que acontece quando essa tabela passa a se relacionar com outras:
+        uma junção pode confirmar vínculos, revelar lacunas ou criar casos indevidos.
+
+        ### Como percorrer este notebook
+
+        A primeira célula de código apenas prepara o ambiente: no Colab, ela localiza
+        o repositório e instala o que estiver ausente; em uma execução local, apenas
+        informa que nenhuma clonagem é necessária. **Ela ainda não transforma os
+        dados da pesquisa.** Execute-a uma vez e, depois, acompanhe cada exemplo pela
+        sequência: pergunta → explicação → código → interpretação da saída.
+        """),
+        md("""
+        ## 1. Chaves e cardinalidade
+
+        Antes de juntar, declare a unidade de cada tabela e a cardinalidade esperada:
+        1:1, 1:N ou N:N. Uma chave duplicada pode multiplicar linhas e fabricar peso
+        analítico. `validate` testa a hipótese de cardinalidade; `indicator` mostra a
+        cobertura da correspondência.
+
+        ![Três painéis representam relações um para um, um para muitos e muitos para muitos, mostrando por que a cardinalidade precisa ser declarada e testada antes da junção.](imagens/03_cardinalidades.svg)
+
+        Cardinalidade descreve quantas linhas de um lado podem corresponder a cada
+        linha do outro. Ela deve ser formulada, confrontada com os dados e testada no
+        código antes da junção.
+
+        ### Primeiro exemplo: acrescentar o nome oficial do município
+
+        Queremos enriquecer o catálogo de documentos com informações da tabela de
+        municípios. Antes da junção, o código abre os dois arquivos e registra o que
+        cada um representa:
+
+        | Objeto no código | Unidade de cada linha | Chave usada |
+        |---|---|---|
+        | `catalogo` | um documento | `codigo_municipio` |
+        | `municipios` | um município | `codigo_municipio` |
+
+        Como vários documentos podem pertencer ao mesmo município, mas cada código
+        deve identificar somente um município na tabela de referência, a relação
+        esperada é **muitos para um** (`many_to_one`). A célula seguinte somente lê os
+        arquivos e apresenta suas dimensões; ainda não os combina.
+        """),
+        code("""
+        import pandas as pd
+
+        catalogo = pd.read_csv(
+            "dados/intermediarios/catalogo_normalizado.csv",
+            dtype={"codigo_municipio": "string"},
+        )
+        municipios = pd.read_csv(
+            "dados/brutos/extrato_codigos_municipios_ibge.csv",
+            dtype={"codigo_municipio": "string"},
+        )
+
+        pd.DataFrame({
+            "tabela": ["catalogo", "municipios"],
+            "linhas": [len(catalogo), len(municipios)],
+            "colunas": [len(catalogo.columns), len(municipios.columns)],
+            "unidade_da_linha": ["documento", "município"],
+        })
+        """),
+        md("""
+        Com as tabelas carregadas, podemos realizar a junção. Leia os argumentos do
+        código como uma declaração metodológica:
+
+        - `on="codigo_municipio"`: procura códigos iguais nas duas tabelas;
+        - `how="left"`: mantém todos os documentos, mesmo quando não encontra um
+          município correspondente;
+        - `validate="many_to_one"`: exige que cada código da tabela municipal apareça
+          no máximo uma vez;
+        - `indicator=True`: cria `_merge`, uma coluna que informa se cada linha foi
+          encontrada nas duas tabelas (`both`) ou somente em uma delas.
+
+        Ao final, a contagem de `_merge` mostra a cobertura da junção. O resultado
+        desejado é que os oito documentos estejam em `both`; qualquer `left_only`
+        exigiria investigação.
+        """),
+        code("""
+        integrada = catalogo.merge(
+            municipios,
+            on="codigo_municipio",
+            how="left",
+            validate="many_to_one",
+            indicator=True,
+        )
+
+        integrada["_merge"].value_counts()
+        """),
+        md("""
+        A junção foi executada com uma cardinalidade declarada e um indicador de
+        correspondência. O resultado técnico precisa agora ser auditado: preservar o
+        número de linhas não garante que todas as chaves tenham sido encontradas.
+
+        ### Auditoria da junção
+
+        `left_only` não deve ser descartado automaticamente: pode indicar código
+        inválido, cobertura incompleta da tabela de referência ou mudança temporal.
+        Compare contagens antes e depois e examine chaves sem correspondência.
+
+        A célula seguinte reúne cinco verificações em um pequeno relatório:
+
+        | Campo do relatório | O que permite verificar |
+        |---|---|
+        | `linhas_antes` e `linhas_depois` | se a junção multiplicou ou removeu documentos |
+        | `sem_correspondencia` | quantos documentos não encontraram município |
+        | `ids_unicos_antes` e `ids_unicos_depois` | se a quantidade de documentos distintos foi preservada |
+
+        `len` conta linhas; `nunique` conta identificadores distintos; e
+        `eq("left_only").sum()` conta as linhas marcadas como sem correspondência.
+        """),
+        code("""
+        auditoria_juncao = {
+            "linhas_antes": len(catalogo),
+            "linhas_depois": len(integrada),
+            "sem_correspondencia": int(integrada["_merge"].eq("left_only").sum()),
+            "ids_unicos_antes": int(catalogo["id_documento"].nunique()),
+            "ids_unicos_depois": int(integrada["id_documento"].nunique()),
+        }
+        pd.Series(auditoria_juncao)
+        """),
+        md("""
+        A auditoria mostrou como avaliar uma relação entre duas tabelas. Uma base de
+        pesquisa, porém, costuma reunir relações diferentes; textos, temas e
+        indicadores não compartilham necessariamente a mesma cardinalidade.
+
+        ## 2. Integrar textos, metadados e indicadores
+
+        **Integrar** significa relacionar informações que descrevem a mesma unidade
+        sem confundir unidades diferentes. Nesta base, há quatro tipos de registro:
+
+        | Informação | Unidade de cada linha ou item | Relação com um documento |
+        |---|---|---|
+        | catálogo normalizado | um documento | uma linha por documento |
+        | arquivo textual | o texto disponível de um documento | zero ou um texto nesta versão |
+        | atribuição temática | uma relação documento–tema | um documento pode ter vários temas |
+        | indicador | uma relação documento–tema–período | um documento pode ter vários indicadores |
+
+        A distinção é importante porque “vários temas” não significa “vários
+        documentos”. Se repetíssemos a linha inteira de D001 para registrar educação e
+        progresso, também repetiríamos título, município e número de palavras. Uma
+        soma posterior poderia contar o mesmo documento duas vezes.
+
+        ![A tabela de documentos conecta-se por chaves a textos, relações documento-tema, municípios e indicadores, com marcações das cardinalidades esperadas.](imagens/03_modelo_relacional_base.svg)
+
+        O desenho não exige colocar tudo em um único arquivo. Ele mantém uma tabela
+        central de documentos e tabelas auxiliares ligadas pelo identificador
+        `id_documento`. A seção seguirá quatro passos:
+
+        1. abrir os metadados que indicam arquivos textuais e temas;
+        2. criar separadamente a tabela de textos e a tabela documento–tema;
+        3. ligar os textos disponíveis ao catálogo sem remover documentos sem texto;
+        4. reorganizar os indicadores e exportar os três produtos derivados.
+
+        ### 2.1 Ler o registro que orienta a integração
+
+        O JSON contém um objeto por documento. D001, por exemplo, aponta para
+        `D001.txt` e possui dois temas. O código abaixo apenas abre e apresenta esses
+        objetos; ainda não realiza nenhuma junção.
+
+        Leia a célula em quatro movimentos:
+
+        1. `Path(...)` representa o caminho do arquivo;
+        2. `read_text(...)` lê seu conteúdo como texto;
+        3. `json.loads(...)` interpreta esse texto como objetos Python;
+        4. `pd.DataFrame(...)` apenas os apresenta em forma de tabela para inspeção.
+
+        A variável `metadados` continua preservando a estrutura do JSON. A conversão
+        final em `DataFrame` serve somente para tornar a saída mais fácil de ler neste
+        momento.
+        """),
+        code("""
+        import json
+        from pathlib import Path
+
+        caminho_metadados = Path("dados/brutos/metadados.json")
+        texto_json = caminho_metadados.read_text(encoding="utf-8")
+        metadados = json.loads(texto_json)
+
+        pd.DataFrame(metadados)
+        """),
+        md("""
+        ### 2.2 Criar as tabelas de temas e textos
+
+        Nesta etapa, aprenderemos que os dados podem ser mantidos em **tabelas
+        separadas conforme o que cada linha representa**. A separação não rompe a
+        relação entre eles: todas as tabelas conservam `id_documento` como chave
+        comum e podem ser reunidas posteriormente, quando a pergunta de pesquisa
+        exigir.
+
+        | Tabela | O que uma linha representa |
+        |---|---|
+        | tabela central de documentos | um documento |
+        | tabela de textos | o texto disponível de um documento |
+        | tabela documento–tema | a associação entre um documento e um tema |
+
+        Esse arranjo evita repetir indevidamente a linha completa de um documento.
+        D001, por exemplo, é um documento associado a dois temas — não dois
+        documentos diferentes.
+
+        Para transformar a lista de temas em tabela, precisamos produzir **uma linha
+        para cada relação**. O primeiro `for` percorre documentos; o segundo percorre
+        os temas daquele documento. Assim, D001 produzirá duas linhas, sem duplicar a
+        linha do catálogo.
+
+        | `id_documento` | `tema` |
+        |---|---|
+        | D001 | educação |
+        | D001 | progresso |
+
+        O mesmo bloco cria uma segunda tabela com apenas os textos disponíveis. A
+        condição `if arquivo_texto is not None` evita tentar abrir um arquivo quando o
+        JSON informa que ele não existe nesta versão. Ausência de texto não significa
+        ausência do documento no catálogo.
+        """),
+        code("""
+        linhas_temas = []
+        linhas_textos = []
+
+        # Primeiro, percorremos um documento por vez.
+        for item in metadados:
+            id_documento = item["id_documento"]
+
+            # Cada tema do documento se torna uma relação em uma nova linha.
+            for tema in item["temas"]:
+                linhas_temas.append({
+                    "id_documento": id_documento,
+                    "tema": tema,
+                })
+
+            # O texto só é lido quando o JSON informa um nome de arquivo.
+            arquivo_texto = item["arquivo_texto"]
+            if arquivo_texto is not None:
+                caminho = Path("dados/brutos") / arquivo_texto
+                linhas_textos.append({
+                    "id_documento": id_documento,
+                    "texto": caminho.read_text(encoding="utf-8"),
+                })
+
+        tabela_temas = pd.DataFrame(linhas_temas)
+        tabela_textos = pd.DataFrame(linhas_textos)
+
+        print("Relações documento–tema:", len(tabela_temas))
+        print("Textos disponíveis:", len(tabela_textos))
+        tabela_temas
+        """),
+        md("""
+        As duas tabelas agora preservam unidades distintas: uma linha da
+        `tabela_temas` é uma atribuição temática; uma linha da `tabela_textos` é um
+        texto disponível. Somente a tabela de textos pode ser ligada diretamente à
+        tabela central sem multiplicar documentos, pois há no máximo um texto por ID
+        nesta versão.
+
+        ### 2.3 Ligar os textos sem excluir documentos
+
+        A junção abaixo parte de `integrada`, que possui oito documentos, e procura um
+        texto com o mesmo `id_documento`:
+
+        - `how="left"` preserva todos os documentos da tabela da esquerda;
+        - `on="id_documento"` declara a chave compartilhada;
+        - `validate="one_to_one"` interrompe a execução se um ID aparecer repetido em
+          qualquer uma das duas tabelas.
+
+        O resultado continua com oito documentos. D001 e D002 recebem texto; os demais
+        permanecem com valor ausente na coluna `texto`. Essa ausência é informação
+        sobre a cobertura textual da versão, não motivo para apagar a linha.
+        """),
+        code("""
+        base_documentos = integrada.merge(
+            tabela_textos,
+            on="id_documento",
+            how="left",
+            validate="one_to_one",
+        )
+
+        print("Documentos antes da junção textual:", len(integrada))
+        print("Documentos depois da junção textual:", len(base_documentos))
+        base_documentos[["id_documento", "titulo", "texto"]].head(4)
+        """),
+        md("""
+        Textos e temas já foram separados segundo suas cardinalidades, e a junção
+        textual preservou a quantidade de documentos. Falta aplicar a mesma lógica
+        aos indicadores.
+
+        ### 2.4 Transformar indicadores largos em relações explícitas
+
+        Na tabela recebida, nomes como `educacao_1890` misturam duas informações na
+        mesma coluna: tema e período. `melt` mantém `id_documento` e transforma as
+        demais colunas em pares `tema_periodo`–`ocorrencias`.
+
+        Em seguida, `rsplit("_", n=1)` divide cada nome pelo último sublinhado:
+        `educacao_1890` torna-se tema `educacao` e período `1890`. Essa regra depende
+        de uma convenção documentada: todo nome precisa terminar em sublinhado e quatro
+        dígitos de ano.
+        """),
+        code("""
+        largo = pd.read_csv("dados/brutos/indicadores_largos.csv")
+        indicadores = largo.melt(
+            id_vars="id_documento",
+            var_name="tema_periodo",
+            value_name="ocorrencias",
+        )
+
+        tema_e_periodo = indicadores["tema_periodo"].str.rsplit(
+            "_", n=1, expand=True
+        )
+        tema_e_periodo.columns = ["tema", "periodo"]
+
+        indicadores[["tema", "periodo"]] = tema_e_periodo
+        indicadores = indicadores[
+            ["id_documento", "tema", "periodo", "ocorrencias"]
+        ]
+        indicadores.head(8)
+        """),
+        md("""
+        A transformação não calculou novos indicadores nem resumiu valores; apenas
+        mudou sua organização. Agora cada linha declara diretamente sua unidade:
+        documento–tema–período. Com as três tabelas prontas, podemos exportá-las.
+
+        ### 2.5 Exportar produtos derivados
+
+        Cada comando `to_csv` grava uma tabela com função própria. A coluna `_merge`
+        foi útil para auditar a junção municipal, mas não pertence ao produto final e
+        é retirada da tabela de documentos.
+        """),
+        code("""
+        base_documentos.drop(columns="_merge").to_csv(
+            "dados/derivados/documentos_processaveis.csv", index=False
+        )
+        tabela_temas.to_csv(
+            "dados/derivados/documentos_temas.csv", index=False
+        )
+        indicadores.to_csv(
+            "dados/derivados/indicadores_longos.csv", index=False
+        )
+
+        pd.Series({
+            "documentos": len(base_documentos),
+            "relações documento–tema": len(tabela_temas),
+            "relações documento–tema–período": len(indicadores),
+        })
+        """),
+        md("""
+        O modelo relacional preserva entidades e multiplicidades em tabelas ligadas.
+        Para que esse desenho seja reproduzível, também precisamos organizar arquivos,
+        ordem de execução, parâmetros e produtos derivados.
+
+        ## 3. Organização e execução
+
+        Uma estrutura simples separa entrada, intermediários e derivados. Notebooks
+        numerados tornam a ordem visível, mas reprodutibilidade também requer ambiente,
+        parâmetros, versões e execução desde o início. Saídas derivadas devem poder ser
+        reconstruídas sem editar manualmente células intermediárias.
+
+        Antes de ler o código, traduza cada verificação para uma pergunta sobre a
+        pesquisa:
+
+        | Verificação no código | Pergunta em linguagem comum | Resultado esperado |
+        |---|---|---|
+        | IDs únicos | cada linha da tabela central representa um documento diferente? | `True` |
+        | nenhuma linha criada | as junções evitaram multiplicar documentos? | `True` |
+        | temas referenciam documentos | todo ID usado na tabela de temas existe na tabela central? | `True` |
+        | arquivos derivados | os três produtos planejados foram gravados? | `3` |
+
+        `is_unique` responde à primeira pergunta. A comparação de comprimentos testa
+        a segunda. `issubset` verifica se o conjunto de IDs dos temas está contido no
+        conjunto de documentos. Por fim, `glob("*.csv")` localiza os arquivos CSV na
+        pasta de derivados e `len` os conta.
+        """),
+        code("""
+        from pathlib import Path
+
+        verificacoes = {
+            "ids_documentos_unicos": base_documentos["id_documento"].is_unique,
+            "nenhuma_linha_criada_nas_juncoes": (
+                len(base_documentos) == len(catalogo)
+            ),
+            "temas_referenciam_documentos": set(
+                tabela_temas["id_documento"]
+            ).issubset(set(base_documentos["id_documento"])),
+            "arquivos_derivados": len(list(Path("dados/derivados").glob("*.csv"))),
+        }
+        pd.Series(verificacoes)
+        """),
+        md("""
+        As verificações anteriores testam se arquivos, chaves e relações foram
+        reconstruídos como esperado. O plano de integração transforma esses testes em
+        um desenho explícito que pode ser revisado antes de receber dados reais.
+
+        ## U03-A04 — Atividade — plano de integração
+
+        Desenhe as tabelas, unidades, chaves, cardinalidades, campos compartilhados,
+        validações, tratamento de não correspondências e saídas. Indique como um
+        resultado será rastreado até a fonte. **Plano:** Escreva aqui.
+
+        O plano produzido na atividade reúne unidades, chaves, cardinalidades,
+        validações e rastreamento. A síntese destaca a consequência metodológica desse
+        desenho: integrar dados é afirmar identidades e relações entre entidades.
+
+        ## Síntese
+
+        Junção é uma afirmação de identidade e relação, não mero encaixe de colunas.
+        A base processável pode ser plural: tabela de documentos, tabela de relações,
+        textos e indicadores ligados por chaves verificadas. Leve esse pacote para a
+        oficina, onde inventário, transformações, integrações, testes e documentação
+        serão avaliados como uma única entrega.
+        """),
+    ]
+
+
+def oficina() -> list[dict]:
+    return [
+        md("""
+        # U03-A05 — Oficina — Primeira base processável
+
+        Este notebook é um roteiro de projeto. Execute transformações em uma cópia
+        própria ou notebook técnico; registre aqui decisões, evidências e resultados.
+        Não altere os arquivos brutos.
+
+        ![Dados brutos, código, dados derivados e documentação formam um pacote submetido a testes e parecer de qualidade, com retorno rastreável para correções.](imagens/04_pacote_processavel.svg)
+
+        A figura funciona também como checklist: um CSV isolado não demonstra como a
+        base foi produzida, testada ou delimitada. A entrega precisa combinar os
+        componentes e manter vínculos entre eles.
+        """),
+        md("""
+        A oficina começa pelo inventário porque nenhuma transformação pode ser
+        avaliada sem conhecer pergunta, unidade, entradas, versões e política de
+        preservação. Essa descrição estabelece o escopo de todas as etapas seguintes.
+
+        ## 1. Inventário e estrutura
+
+        **Pergunta e unidade de análise:** Escreva aqui.
+
+        **Arquivos, formatos, versões e proveniência:** Escreva aqui.
+
+        **Estrutura de pastas e política de imutabilidade:** Escreva aqui.
+
+        **Ambiente e dependências:** Escreva aqui.
+        """),
+        md("""
+        Com as entradas e o ambiente identificados, podemos registrar como cada fonte
+        será convertida em uma representação legível. As escolhas de importação e
+        extração precisam produzir saídas compatíveis com o inventário declarado.
+
+        ## 2. Importação e extração
+
+        | Fonte | Leitor/parâmetros | Estrutura esperada | Teste | Saída |
+        |---|---|---|---|---|
+        | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui |
+
+        **PDFs com texto, PDFs de imagem e TXT:** Escreva aqui.
+
+        **Plano de OCR, amostra de controle e métrica de erro:** Escreva aqui.
+        """),
+        md("""
+        A importação produz objetos técnicos, mas ainda não garante uma organização
+        coerente para análise. O modelo tabular define o que cada linha representa e
+        quais transformações serão aplicadas sem apagar os valores recebidos.
+
+        ## 3. Modelo tabular e transformação
+
+        **Tabelas e unidade de cada linha:** Escreva aqui.
+
+        **Decisão largo/longo:** Escreva aqui.
+
+        | Campo | Original preservado | Regra | Justificativa | Teste | Perda possível |
+        |---|---|---|---|---|---|
+        | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui |
+        """),
+        md("""
+        As regras do modelo tabular tornam valores comparáveis e auditáveis. Essa
+        comparabilidade permite diagnosticar ausências e semelhanças, mas não autoriza
+        preencher lacunas ou eliminar registros automaticamente.
+
+        ## 4. Ausências e duplicatas
+
+        **Representações de ausência e razões:** Escreva aqui.
+
+        **Chave de duplicata exata:** Escreva aqui.
+
+        **Critérios de possível duplicata e revisão humana:** Escreva aqui.
+
+        **Decisão de manter, relacionar, fundir ou excluir:** Escreva aqui.
+        """),
+        md("""
+        Depois de representar ausências e revisar possíveis duplicatas, as unidades
+        estão mais bem definidas para integração. Agora é necessário declarar como as
+        tabelas se relacionam e testar se a junção preserva o número e a identidade dos casos.
+
+        ## 5. Junções e integração
+
+        | Tabelas | Chave | Cardinalidade | Validação | Não correspondências |
+        |---|---|---|---|---|
+        | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui | Escreva aqui |
+
+        **Vínculo entre texto, metadado, indicador e fonte:** Escreva aqui.
+
+        **Contagens antes/depois e riscos de multiplicação:** Escreva aqui.
+        """),
+        md("""
+        As junções produzem a base integrada, mas o resultado ainda precisa demonstrar
+        como foi construído. Logs e testes ligam cada saída às entradas, parâmetros e
+        decisões que tornam o processo reproduzível.
+
+        ## 6. Registro e testes
+
+        **Log de transformações:** Escreva aqui.
+
+        **Testes de esquema, domínios, chaves e arquivos:** Escreva aqui.
+
+        **Como reconstruir a base desde os brutos:** Escreva aqui.
+
+        **Erros conhecidos e casos pendentes:** Escreva aqui.
+        """),
+        md("""
+        Com inventário, transformações, relações e testes documentados, já podemos
+        avaliar o pacote como um todo. A rubrica converte os requisitos metodológicos
+        em critérios comuns para autoavaliação.
+
+        ## 7. Rubrica
+
+        | Critério | 0 | 1 | 2 | Minha nota/evidência |
+        |---|---|---|---|---|
+        | preservação e proveniência | ausente | parcial | auditável | Escreva aqui |
+        | importação | implícita | parâmetros parciais | testada | Escreva aqui |
+        | limpeza | sobrescreve | regras incompletas | original + regra + teste | Escreva aqui |
+        | ausências/duplicatas | descartadas | diagnosticadas | justificadas | Escreva aqui |
+        | junções | sem controle | chave declarada | cardinalidade auditada | Escreva aqui |
+        | integração | arquivos soltos | vínculos parciais | chaves verificadas | Escreva aqui |
+        | reprodutibilidade | manual | ordem parcial | reconstruível | Escreva aqui |
+        """),
+        md("""
+        A autoavaliação identifica lacunas segundo critérios conhecidos. A revisão por
+        pares acrescenta uma tentativa externa de reconstruir decisões, localizar
+        junções perigosas e verificar limites que o autor pode não ter percebido.
+
+        ## U03-A06 — 8. Entrega e revisão por pares
+
+        Entregue inventário, notebooks, base processável, tabelas relacionais, log,
+        relatório de qualidade e ficha de proveniência. O colega deve tentar localizar
+        uma regra não reversível, uma junção perigosa e um limite não documentado.
+
+        **Parecer recebido e mudanças:** Escreva aqui.
+
+        **O que a Unidade 4 poderá explorar e o que ainda não deve concluir:**
+        Escreva aqui. Esta resposta encerra a Unidade 3: ela distingue a base que já
+        pode ser explorada das questões de qualidade que ainda condicionam qualquer
+        descrição, gráfico ou hipótese na unidade seguinte.
+        """),
+    ]
+
+
+def readme() -> None:
+    links = tabela_links_colab(
+        UNIDADE.name,
+        (
+            ("Guia da unidade", "00_guia_da_unidade.ipynb"),
+            ("Formatos, importação e extração", "01_formatos_importacao_e_extracao.ipynb"),
+            ("Estrutura, limpeza e qualidade", "02_estrutura_limpeza_e_qualidade.ipynb"),
+            ("Junções, integração e reprodutibilidade", "03_juncoes_integracao_e_reprodutibilidade.ipynb"),
+            ("Oficina da base processável", "04_oficina_base_processavel.ipynb"),
+        ),
+    )
+    conteudo = """
+    # Unidade 3 — Transformação de fontes em dados analisáveis
+
+    ## Ordem
+
+    1. `00_guia_da_unidade.ipynb`
+    2. `01_formatos_importacao_e_extracao.ipynb`
+    3. `02_estrutura_limpeza_e_qualidade.ipynb`
+    4. `03_juncoes_integracao_e_reprodutibilidade.ipynb`
+    5. `04_oficina_base_processavel.ipynb`
+    6. `exercicios_unidade_03_texto.md`
+
+    ## Abrir os notebooks no Google Colab
+
+    __LINKS_COLAB__
+
+    O link carrega o notebook diretamente do GitHub. Nos Notebooks 00 a 03,
+    execute primeiro a célula **Preparação do ambiente**. Ela clona o
+    repositório, posiciona a execução nesta unidade e instala apenas alguma
+    dependência ausente. O Notebook 04 é discursivo e não precisa de clonagem.
+
+    ## Dados e dependências
+
+    Dados fictícios e um extrato didático documentado do IBGE ficam separados em
+    `brutos`, `intermediarios` e `derivados`. Requer Python 3, pandas, openpyxl,
+    pypdf e Pillow. Tesseract é opcional; há saída pré-computada para execução
+    offline sem o programa. `imagens/` reúne a ilustração de abertura e sete
+    diagramas SVG acessíveis; as duas imagens sintéticas de OCR ficam em `dados/brutos`
+    porque são entradas do experimento, não apenas elementos decorativos.
+
+    Nunca edite os dados brutos. Reconstrua intermediários e derivados executando os
+    notebooks em ordem. As análises substantivas começam na Unidade 4.
+
+    `exercicios_unidade_03_texto.md` contém 18 questões de múltipla escolha.
+    `gabaritos/` reúne respostas-modelo e rubrica; `revisores/` contém
+    seis roteiros e seus pareceres executados.
+    """
+    conteudo = dedent(conteudo).replace("__LINKS_COLAB__", links)
+    (UNIDADE / "README.md").write_text(conteudo.strip() + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    UNIDADE.mkdir(exist_ok=True)
+    criar_dados()
+    construir_imagens()
+    salvar_notebook("00_guia_da_unidade.ipynb", guia(), requer_repositorio=True)
+    salvar_notebook(
+        "01_formatos_importacao_e_extracao.ipynb",
+        formatos(),
+        requer_repositorio=True,
+    )
+    salvar_notebook(
+        "02_estrutura_limpeza_e_qualidade.ipynb",
+        limpeza(),
+        requer_repositorio=True,
+    )
+    salvar_notebook(
+        "03_juncoes_integracao_e_reprodutibilidade.ipynb",
+        integracao(),
+        requer_repositorio=True,
+    )
+    salvar_notebook("04_oficina_base_processavel.ipynb", oficina())
+    readme()
+    print(f"Unidade 3 construída em: {UNIDADE}")
+
+
+if __name__ == "__main__":
+    main()
